@@ -2,7 +2,7 @@
 
 #include <fstream>
 #include <cstdio>
-#include <unistd.h>
+#include <filesystem>
 
 #include "test_framework.h"
 
@@ -10,9 +10,14 @@ using namespace dpi;
 
 namespace {
 
+// std::filesystem::temp_directory_path() resolves to the right place on
+// both Linux (/tmp) and Windows (%TEMP%) — don't hardcode /tmp, it doesn't
+// exist as a real path on Windows and the write will silently fail there.
 std::string makeTempPath() {
     static int counter = 0;
-    return "/tmp/dpi_test_" + std::to_string(getpid()) + "_" + std::to_string(counter++) + ".pcap";
+    auto path = std::filesystem::temp_directory_path() /
+                ("dpi_test_" + std::to_string(counter++) + ".pcap");
+    return path.string();
 }
 
 std::string writeTempPcap(const std::vector<std::vector<uint8_t>>& packets) {
