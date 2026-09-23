@@ -9,6 +9,8 @@ option(ENABLE_SANITIZERS "Build with ASan + UBSan" ON)
 add_library(dpi_core
     src/pcap_reader.cpp
     src/packet_parser.cpp
+    src/tcp_reassembler.cpp
+    src/tls_parser.cpp
 )
 target_include_directories(dpi_core PUBLIC include)
 target_compile_options(dpi_core PUBLIC -Wall -Wextra)
@@ -23,6 +25,9 @@ add_executable(dpi_tests
     tests/main.cpp
     tests/test_pcap_reader.cpp
     tests/test_packet_parser.cpp
+    tests/test_tcp_reassembler.cpp
+    tests/test_tls_parser.cpp
+    tests/test_reassembly_tls_integration.cpp
 )
 target_link_libraries(dpi_tests PRIVATE dpi_core)
 target_include_directories(dpi_tests PRIVATE tests include)
