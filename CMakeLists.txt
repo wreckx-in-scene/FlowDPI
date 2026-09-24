@@ -11,6 +11,8 @@ add_library(dpi_core
     src/packet_parser.cpp
     src/tcp_reassembler.cpp
     src/tls_parser.cpp
+    src/block_rules.cpp
+    src/dpi_engine.cpp
 )
 target_include_directories(dpi_core PUBLIC include)
 target_compile_options(dpi_core PUBLIC -Wall -Wextra)
@@ -28,8 +30,13 @@ add_executable(dpi_tests
     tests/test_tcp_reassembler.cpp
     tests/test_tls_parser.cpp
     tests/test_reassembly_tls_integration.cpp
+    tests/test_block_rules.cpp
+    tests/test_dpi_engine.cpp
 )
 target_link_libraries(dpi_tests PRIVATE dpi_core)
 target_include_directories(dpi_tests PRIVATE tests include)
 
 add_test(NAME dpi_tests COMMAND dpi_tests)
+
+add_executable(flowdpi src/main.cpp)
+target_link_libraries(flowdpi PRIVATE dpi_core)
