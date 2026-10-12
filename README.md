@@ -1,44 +1,76 @@
-# DPI Engine
+# FlowDPI
 
-A deep packet inspection engine, built up in layers instead of one drop.
+A small C++ deep-packet-inspection demo. It analyzes offline PCAP files or
+captures live traffic through Npcap/libpcap in monitor-only mode. It reports
+traffic matching IPv4, TCP/UDP port, or TLS SNI domain rules. Matching traffic
+is **not dropped or blocked on the network**.
 
-## Status: Milestone 1 — core parsing
+## Current capabilities
 
-- `PcapReader` — reads libpcap-format capture files, byte-order aware, rejects malformed/hostile framing instead of trusting file-declared lengths.
-- `PacketParser` — Ethernet → IPv4 → TCP/UDP. Header lengths (IPv4 IHL, TCP data offset) are read and walked, not assumed, so packets with IP/TCP options parse correctly.
-- `FiveTuple` / `FiveTupleHash` — flow identity, ready for a flow table.
-- Built and tested under `-fsanitize=address,undefined` by default.
+- Reads libpcap-format capture files and checks packet framing before use.
+- Optionally captures from a selected live network interface.
+- Parses Ethernet, IPv4, TCP, and UDP packets, including IPv4/TCP options.
+- Tracks directional flows by five-tuple and reassembles common TCP segments.
+- Extracts SNI from TLS ClientHello messages when visible in the capture.
+- Reports matches for IPv4 addresses, TCP/UDP ports, and domains/subdomains.
+- Can process PCAP input with multiple workers using `--workers`.
 
-Not yet built: TLS SNI extraction, TCP stream reassembly, flow-level blocking, concurrency, live capture. See the milestone plan below.
+IPv6, VLAN decoding, full TCP overlap handling, encrypted ClientHello visibility,
+and live packet dropping are outside the current scope.
 
-## Build & test
+## Build and test
 
-```bash
-mkdir build && cd build
-cmake ..
-make
-./dpi_tests
+With CMake and a C++17 compiler:
+
+```powershell
+cmake -S . -B build -DENABLE_SANITIZERS=OFF
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-Sanitizers are on by default (`ENABLE_SANITIZERS=ON`). To build without them (e.g. for a later perf benchmark run):
+Sanitizers are enabled by default. Set `-DENABLE_SANITIZERS=OFF` if the
+toolchain does not provide ASan/UBSan.
 
-```bash
-cmake .. -DENABLE_SANITIZERS=OFF
+Live capture is optional. On Windows, install Npcap and extract the Npcap SDK.
+Set `NPCAP_SDK` to the extracted SDK directory before configuring, for example:
+
+```powershell
+$env:NPCAP_SDK = "C:\path\to\npcap-sdk"
+cmake -S . -B build -DENABLE_SANITIZERS=OFF
+cmake --build build
 ```
 
-## Layout
+On Linux/macOS, install libpcap and pkg-config. Reconfigure CMake after
+installing capture dependencies. Capture may require administrator/root
+privileges.
 
+## Usage
+
+Analyze a capture file:
+
+```text
+flowdpi capture.pcap --block-ip 10.0.0.1 --block-domain example.com --block-port tcp 443
 ```
-include/        public headers
-src/            implementation
-tests/          self-contained test framework + unit tests (no external deps)
+
+Run live capture on an interface (use its Npcap/libpcap device name):
+
+```text
+flowdpi --live "\Device\NPF_{...}" --block-port tcp 443 --block-port udp 53
 ```
 
-## Milestone plan
+Press Ctrl+C to stop and print the report. A matching rule is reported as a
+match only; it does not prevent the packet from reaching its destination.
 
-1. **Core parsing correctness** (this milestone) — pcap reading, Ethernet/IP/TCP/UDP parsing, five-tuple, unit tests, ASan/UBSan clean.
-2. **TLS SNI extraction** — TLV-walking extension parser, per-flow TCP reassembly so a ClientHello split across segments still parses.
-3. **Single-threaded engine end-to-end** — rule engine, flow-level blocking, report generation.
-4. **Concurrency layer** — reader → load-balancer → fast-path → writer pipeline.
-5. **Live capture + latency instrumentation** — libpcap/AF_PACKET live interface, per-packet p50/p99/p999 latency histogram.
-6. **Polish** — CI, fuzz target on the TLS parser, benchmark suite.
+## Architecture
+
+```text
+include/        public headers and core data types
+src/            PCAP/live capture, parsing, reassembly, rules, engine, CLI
+tests/          unit and end-to-end tests
+```
+
+## Next step
+
+Platform-specific packet enforcement (for example, Windows Filtering Platform
+or WinDivert) could be added later to drop traffic that matches a rule. That is
+not implemented in this monitor-only version.
