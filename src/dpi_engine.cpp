@@ -1,5 +1,7 @@
 #include "dpi_engine.h"
 
+#include <algorithm>
+#include <chrono>
 #include <sstream>
 #include <utility>
 
@@ -10,6 +12,8 @@
 namespace dpi {
 
 namespace {
+using Clock = std::chrono::steady_clock;
+
 std::string ipToString(uint32_t ip) {
     std::ostringstream oss;
     oss << ((ip >> 24) & 0xFF) << '.' << ((ip >> 16) & 0xFF) << '.' << ((ip >> 8) & 0xFF) << '.'
@@ -23,6 +27,22 @@ std::string describeDirection(uint32_t src_ip, uint16_t src_port, uint32_t dst_i
 }
 }  // namespace
 
+LatencyPercentiles computeLatencyPercentiles(std::vector<double> latencies_ns) {
+    LatencyPercentiles result;
+    if (latencies_ns.empty()) return result;
+
+    std::sort(latencies_ns.begin(), latencies_ns.end());
+    auto pct = [&](double p) {
+        size_t idx = static_cast<size_t>(p * static_cast<double>(latencies_ns.size() - 1));
+        return latencies_ns[idx];
+    };
+    result.p50 = pct(0.50);
+    result.p99 = pct(0.99);
+    result.p999 = pct(0.999);
+    result.max_ns = latencies_ns.back();
+    return result;
+}
+
 DpiEngine::DpiEngine(BlockRules rules) : rules_(std::move(rules)) {}
 
 bool DpiEngine::processFile(const std::string& pcap_path) {
@@ -31,15 +51,21 @@ bool DpiEngine::processFile(const std::string& pcap_path) {
 
     RawPacket raw;
     while (reader.readNextPacket(raw)) {
-        processPacket(raw);
+        processPacket(std::move(raw));
     }
     return true;
 }
 
-void DpiEngine::processPacket(const RawPacket& raw) {
+void DpiEngine::processPacket(RawPacket raw) {
     ParsedPacket parsed;
     if (!PacketParser::parse(raw, parsed)) return;  // malformed/unparseable — skip, don't crash
-    if (!parsed.has_ip) return;                     // non-IPv4 traffic out of scope for now
+    processParsedPacket(std::move(raw), parsed);
+}
+
+void DpiEngine::processParsedPacket(RawPacket raw, const ParsedPacket& parsed) {
+    if (!parsed.has_ip) return;  // non-IPv4 traffic out of scope for now
+
+    auto t0 = Clock::now();
 
     report_.total_packets++;
 
@@ -60,18 +86,43 @@ void DpiEngine::processPacket(const RawPacket& raw) {
     // every subsequent packet once a flow is condemned.
     if (flow.blocked) {
         report_.blocked_packets++;
+        report_.packet_latencies_ns.push_back(
+            std::chrono::duration<double, std::nano>(Clock::now() - t0).count());
         return;
     }
 
     // IP-level block check first: cheap, and doesn't need payload/reassembly.
     if (rules_.isBlockedIp(parsed.dst_ip) || rules_.isBlockedIp(parsed.src_ip)) {
         flow.blocked = true;
-        flow.block_reason = "blocked IP";
+        flow.block_reason = "matched blocked IP rule";
         report_.blocked_flows++;
         report_.blocked_packets++;
         report_.blocked_entries.push_back(
             {describeDirection(parsed.src_ip, parsed.src_port, parsed.dst_ip, parsed.dst_port),
              flow.block_reason});
+        report_.packet_latencies_ns.push_back(
+            std::chrono::duration<double, std::nano>(Clock::now() - t0).count());
+        return;
+    }
+
+    if (parsed.has_l4 &&
+        (rules_.isBlockedPort(parsed.protocol, parsed.dst_port) ||
+         rules_.isBlockedPort(parsed.protocol, parsed.src_port))) {
+        flow.blocked = true;
+        uint16_t matched_port = rules_.isBlockedPort(parsed.protocol, parsed.dst_port)
+                                    ? parsed.dst_port
+                                    : parsed.src_port;
+        flow.block_reason =
+            std::string("matched blocked ") +
+            (parsed.protocol == L4Protocol::TCP ? "TCP" : "UDP") + " port " +
+            std::to_string(matched_port) + " rule";
+        report_.blocked_flows++;
+        report_.blocked_packets++;
+        report_.blocked_entries.push_back(
+            {describeDirection(parsed.src_ip, parsed.src_port, parsed.dst_ip, parsed.dst_port),
+             flow.block_reason});
+        report_.packet_latencies_ns.push_back(
+            std::chrono::duration<double, std::nano>(Clock::now() - t0).count());
         return;
     }
 
@@ -86,7 +137,7 @@ void DpiEngine::processPacket(const RawPacket& raw) {
         std::string matched_rule = rules_.matchBlockedDomain(flow.sni);
         if (!matched_rule.empty()) {
             flow.blocked = true;
-            flow.block_reason = "blocked domain (" + matched_rule + ")";
+            flow.block_reason = "matched blocked domain rule (" + matched_rule + ")";
             report_.blocked_flows++;
             report_.blocked_packets++;
             report_.blocked_entries.push_back(
@@ -96,9 +147,10 @@ void DpiEngine::processPacket(const RawPacket& raw) {
         } else {
             report_.observed_snis.push_back(flow.sni);
         }
-        // Either way, resolved — clear so we don't re-check this branch
-        // again on subsequent packets (sni_status already left Pending).
     }
+
+    report_.packet_latencies_ns.push_back(
+        std::chrono::duration<double, std::nano>(Clock::now() - t0).count());
 }
 
 void DpiEngine::tryResolveSni(FlowState& flow) {
@@ -144,11 +196,11 @@ std::string DpiEngine::renderReport() const {
     out << "=== FlowDPI Report ===\n";
     out << "Total packets:   " << report_.total_packets << "\n";
     out << "Total flows:     " << report_.total_flows << "\n";
-    out << "Blocked flows:   " << report_.blocked_flows << "\n";
-    out << "Blocked packets: " << report_.blocked_packets << "\n";
+    out << "Rule-matched flows:   " << report_.blocked_flows << "\n";
+    out << "Rule-matched packets: " << report_.blocked_packets << "\n";
 
     if (!report_.blocked_entries.empty()) {
-        out << "\n-- Blocked --\n";
+        out << "\n-- Rule matches --\n";
         for (const auto& e : report_.blocked_entries) {
             out << "  " << e.description << "  [" << e.reason << "]\n";
         }
@@ -159,6 +211,15 @@ std::string DpiEngine::renderReport() const {
         for (const auto& s : report_.observed_snis) {
             out << "  " << s << "\n";
         }
+    }
+
+    if (!report_.packet_latencies_ns.empty()) {
+        auto lat = computeLatencyPercentiles(report_.packet_latencies_ns);
+        out << "\n-- Processing latency (per packet, excludes pcap I/O) --\n";
+        out << "  p50:  " << lat.p50 << " ns\n";
+        out << "  p99:  " << lat.p99 << " ns\n";
+        out << "  p999: " << lat.p999 << " ns\n";
+        out << "  max:  " << lat.max_ns << " ns\n";
     }
 
     return out.str();

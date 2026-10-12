@@ -46,7 +46,14 @@ struct EngineReport {
     std::vector<BlockedEntry> blocked_entries;  // first-seen order
 
     std::vector<std::string> observed_snis;  // allowed flows' SNIs, first-seen order
+    std::vector<double> packet_latencies_ns;
 };
+
+struct LatencyPercentiles {
+    double p50 = 0, p99 = 0, p999 = 0, max_ns = 0;
+};
+
+LatencyPercentiles computeLatencyPercentiles(std::vector<double> latencies_ns);
 
 // Single-threaded DPI engine: reads a pcap file, reassembles TCP streams
 // enough to extract TLS SNI, checks flows against block rules, and
@@ -67,14 +74,14 @@ public:
     // Processes every packet in the given pcap file. Returns false if the
     // file couldn't be opened.
     bool processFile(const std::string& pcap_path);
-
+        void processParsedPacket(RawPacket raw, const ParsedPacket& parsed);
     const EngineReport& report() const { return report_; }
 
     // Human-readable summary, suitable for printing to stdout.
     std::string renderReport() const;
 
 private:
-    void processPacket(const RawPacket& raw);
+    void processPacket(RawPacket raw);
     void tryResolveSni(FlowState& flow);
 
     BlockRules rules_;

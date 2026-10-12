@@ -39,3 +39,15 @@ TEST(blocks_ip_added_to_rules) {
     CHECK(rules.isBlockedIp(ip));
     CHECK(!rules.isBlockedIp(0x01010101));
 }
+
+TEST(blocked_ports_are_scoped_to_transport_protocol) {
+    BlockRules rules;
+    rules.addBlockedPort(L4Protocol::TCP, 22);
+    rules.addBlockedPort(L4Protocol::UDP, 53);
+
+    CHECK(rules.isBlockedPort(L4Protocol::TCP, 22));
+    CHECK(!rules.isBlockedPort(L4Protocol::UDP, 22));
+    CHECK(rules.isBlockedPort(L4Protocol::UDP, 53));
+    CHECK(!rules.isBlockedPort(L4Protocol::TCP, 53));
+    CHECK(!rules.isBlockedPort(L4Protocol::UNKNOWN, 22));
+}

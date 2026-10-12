@@ -232,6 +232,30 @@ TEST(engine_blocks_by_ip_without_needing_tls) {
     std::remove(path.c_str());
 }
 
+TEST(engine_matches_tcp_port_without_dropping_traffic) {
+    uint32_t client_ip = 0xC0A80101;
+    uint32_t server_ip = 0x08080808;
+    std::vector<uint8_t> payload = {'x'};
+    std::vector<std::vector<uint8_t>> frames = {
+        buildTcpFrame(client_ip, server_ip, 55004, 443, 1, payload)};
+
+    std::string path = makeTempPcapPath();
+    writePcap(path, frames);
+
+    BlockRules rules;
+    rules.addBlockedPort(L4Protocol::TCP, 443);
+
+    DpiEngine engine(rules);
+    CHECK(engine.processFile(path));
+
+    const auto& rep = engine.report();
+    CHECK_EQ(rep.blocked_flows, 1u);
+    CHECK_EQ(rep.blocked_packets, 1u);
+    CHECK(rep.blocked_entries[0].reason == "matched blocked TCP port 443 rule");
+
+    std::remove(path.c_str());
+}
+
 TEST(engine_stops_inspecting_once_flow_is_blocked) {
     // After a flow is blocked, further packets on it should just be
     // counted as blocked, not re-run through parsing/SNI logic — flow-

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    # Runs on real Linux, so ASan/UBSan actually link here even though
+    # they can't on the MinGW/Windows dev setup this project also targets
+    # (MinGW-w64 doesn't ship the sanitizer runtime libraries). This is
+    # what gives sanitizer coverage on every push regardless of what OS
+    # any given commit was developed on.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Run tests
+        run: ./build/dpi_tests
+
+  fuzz-smoke-test:
+    # Not a full fuzzing campaign (that needs a dedicated corpus and much
+    # longer than CI time budgets allow) — this is a smoke test: run the
+    # TLS parser fuzz target for a short, fixed time on every push so a
+    # newly introduced crash is caught immediately rather than only
+    # during an occasional manual fuzzing session.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Build fuzz target
+        run: |
+          clang++ -std=c++17 -Iinclude -fsanitize=fuzzer,address,undefined -g \
+            src/tls_parser.cpp fuzz/fuzz_tls_parser.cpp -o fuzz_tls_parser
+
+      - name: Run fuzzer for 60 seconds
+        run: ./fuzz_tls_parser -max_total_time=60

@@ -4,6 +4,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "types.h"
+
 namespace dpi {
 
 // Holds a set of block rules: blocked IPv4 addresses and blocked domains
@@ -19,8 +21,10 @@ class BlockRules {
 public:
     void addBlockedIp(uint32_t ip);
     void addBlockedDomain(const std::string& domain);
+    void addBlockedPort(L4Protocol protocol, uint16_t port);
 
     bool isBlockedIp(uint32_t ip) const;
+    bool isBlockedPort(L4Protocol protocol, uint16_t port) const;
 
     // Returns the specific rule that matched, or an empty string if
     // `hostname` isn't blocked by anything.
@@ -31,7 +35,10 @@ public:
 
 private:
     std::unordered_set<uint32_t> blocked_ips_;
+    std::unordered_set<uint32_t> blocked_ports_;
     std::vector<std::string> blocked_domains_;  // small in practice; linear scan is fine
+
+    static uint32_t portKey(L4Protocol protocol, uint16_t port);
 };
 
 }  // namespace dpi
